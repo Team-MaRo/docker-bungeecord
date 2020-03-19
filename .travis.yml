@@ -1,0 +1,43 @@
+language: shell
+os: linux
+dist: bionic
+services:
+  - docker
+
+notifications:
+  email: false
+
+jobs:
+  include:
+    - env: BUNGEECORD_JOB_ID=lastStableBuild
+    - if: branch = master
+      env: BUNGEECORD_JOB_ID=1119 # 1.7.10
+    - if: branch = master
+      env: BUNGEECORD_JOB_ID=701 # 1.6.4
+    - if: branch = master
+      env: BUNGEECORD_JOB_ID=666 # 1.6.2
+    - if: branch = master
+      env: BUNGEECORD_JOB_ID=548 # 1.5.2
+    - if: branch = master
+      env: BUNGEECORD_JOB_ID=386 # 1.5.0
+    - if: branch = master
+      env: BUNGEECORD_JOB_ID=251 # 1.4.7
+
+before_install:
+  # Make file executable (Not by default)
+  - chmod +x docker-push.sh
+
+  # Login to make sure we have access to private dockers
+  - |
+    if [[ -v DOCKER_PASSWORD && -v DOCKER_USERNAME ]]; then
+      echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+    fi
+
+script:
+  - docker build --build-arg $BUNGEECORD_JOB_ID -t bungeecord .
+
+after_success:
+  - |
+    if [[ -v DOCKER_PASSWORD && -v DOCKER_USERNAME ]]; then
+      ./docker-push.sh
+    fi

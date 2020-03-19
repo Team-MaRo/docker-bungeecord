@@ -1,21 +1,36 @@
-# Use an official Java runtime as a parent image
-FROM openjdk:latest
+# -------
+# Builder
+# -------
 
-# Who is responsible for this project?
-MAINTAINER Manuele Vaccari <manuele.vaccari@gmail.com>
+FROM alpine:latest AS build
 
-# Volumes to use which stay between updates
+RUN apk add curl
+
+ARG BUNGEECORD_BASE_URL=https://ci.md-5.net/job/BungeeCord/
+ARG BUNGEECORD_JOB_ID=lastStableBuild
+ARG BUNGEECORD_FILE_URL=/artifact/bootstrap/target/BungeeCord.jar
+ARG BUNGEECORD_URL=${BUNGEECORD_BASE_URL}${BUNGEECORD_JOB_ID}${BUNGEECORD_FILE_URL}
+
+RUN curl -o /bungeecord.jar -fL ${BUNGEECORD_URL}
+
+# -------
+# Final Container
+# -------
+
+FROM openjdk:8-jre-slim
+
+COPY --from=build /bungeecord.jar /app/
+
 VOLUME ["/data"]
 
-# Set the working directory to /app
-WORKDIR /app
+ENV JAVA_BASE_MEMORY=512M
+ENV JAVA_MAX_MEMORY=512M
 
-# Copy the source's directory contents into the container at /app
-COPY ./src /app
-RUN chmod +x *.sh
-
-# Make port 25577 available to the world outside this container
 EXPOSE 25577
 
-# Run bungeecord.jar when the container launches
-CMD ["./start.sh"]
+WORKDIR /data
+
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["docker-entrypoint.sh"]
