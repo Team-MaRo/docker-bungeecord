@@ -47,49 +47,37 @@ In order to run this container you'll need docker installed.
 
 ### Usage
 
-#### Docker CLI
+#### Starting a server
 
 ```shell script
-docker run -it \
-           -p 25565:25577 \
-           -v $(pwd)/data:/data \
-           -e JAVA_MAX_MEMORY=1G \
-           d3strukt0r/bungeecord
+docker run \
+      --rm \
+      -d \
+      -p 25565:25577 \
+      -v $(pwd)/data:/data \
+      -e JAVA_MAX_MEMORY=1G \
+      --name bungeecord \
+      d3strukt0r/bungeecord
 ```
 
-#### Docker CLI (detached)
+**Hint**
+
+If you need to add another port to your docker container, use `-p xxxxx:xxxxx` in your command.
+
+#### Reading the logs
 
 ```shell script
-docker run -d \
-           -p 25565:25577 \
-           -v $(pwd)/data:/data \
-           -e JAVA_MAX_MEMORY=1G \
-           --name spigot \
-           d3strukt0r/bungeecord
+docker logs -f bungeecord
 ```
 
-However there is no way to attach back to it, so instead use a library in linux which is known as "screen" and shown in the next section.
-
-#### Docker CLI (with `screen`)
+#### Sending commands
 
 ```shell script
-screen -d -m -S "spigot" \
-  docker run -it \
-             -p 25565:25577 \
-             -v $(pwd)/data:/data \
-             -e JAVA_MAX_MEMORY=1G \
-             d3strukt0r/bungeecord
+docker exec bungeecord console "<command>"
 ```
 
-You can detach from the window using `CTRL` + `a` and then `d`.
+#### Using Docker Compose (docker-compose.yml)
 
-To reattach first find your screen with `screen -r`. And if you gave it a name, you can skip this.
-
-Then enter `screen -r bungeecord` or `screen -r 00000.pts-0.office` (or whatever was shown with `screen -r`)
-
-#### Docker Compose
-
-Example `docker-compose.yml` file:
 ```yml
 version: '2'
 
@@ -101,11 +89,10 @@ services:
     volumes:
       - ./data:/data
     environment:
-      - JAVA_BASE_MEMORY=512M
       - JAVA_MAX_MEMORY=1G
 ```
 
-And then use `docker-compose up` or `docker-compose up -d` for detached. Again using the experience with linux's `screen` library
+And then use `docker-compose up` or `docker-compose up -d` for detached.
 
 ## Built With
 

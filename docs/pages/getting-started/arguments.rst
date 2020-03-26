@@ -7,15 +7,18 @@ Overview of arguments
 Environment Variables
 =====================
 
-- :code:`JAVA_MEMORY` - (Default: :code:`512M`) - Any integer followed by :code:`K` (Kilobyte), :code:`M` (Megabyte) or :code:`G` (Gigabyte)
+- :code:`JAVA_MEMORY` - (Default: :code:`512M`) - Any integer followed by :code:`K` (Kilobyte),
+  :code:`M` (Megabyte) or :code:`G` (Gigabyte)
 
   The Java memory heap size to specify to the JVM.
 
-- :code:`JAVA_BASE_MEMORY` - (Default: :code:`${JAVA_MEMORY}`) - Any integer followed by :code:`K` (Kilobyte), :code:`M` (Megabyte) or :code:`G` (Gigabyte)
+- :code:`JAVA_BASE_MEMORY` - (Default: :code:`${JAVA_MEMORY}`) - Any integer followed by :code:`K`
+  (Kilobyte), :code:`M` (Megabyte) or :code:`G` (Gigabyte)
 
   Can be set to use a different initial heap size.
 
-- :code:`JAVA_MAX_MEMORY` - (Default: :code:`${JAVA_MEMORY}`) - Any integer followed by :code:`K` (Kilobyte), :code:`M` (Megabyte) or :code:`G` (Gigabyte)
+- :code:`JAVA_MAX_MEMORY` - (Default: :code:`${JAVA_MEMORY}`) - Any integer followed by :code:`K`
+  (Kilobyte), :code:`M` (Megabyte) or :code:`G` (Gigabyte)
 
   Can be set to use a different max heap size.
 
@@ -24,7 +27,7 @@ Environment Variables
   Additional -X options to pass to the JVM.
 
 Volumes
-=======
+=====================
 
 - :code:`/data` - (Recommended)
 
