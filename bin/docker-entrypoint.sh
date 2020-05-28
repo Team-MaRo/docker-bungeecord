@@ -12,4 +12,5 @@ true >$_console_input
 
 # Start the main application
 echo "[    ] Starting BungeeCord server..."
+# shellcheck disable=SC2086
 tail -f $_console_input | tee /dev/console | java $JAVA_OPTIONS -jar /app/bungeecord.jar "$@"

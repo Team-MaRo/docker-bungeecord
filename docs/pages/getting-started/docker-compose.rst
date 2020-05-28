@@ -9,25 +9,41 @@ Create a file called :code:`docker-compose.yml` under e. g. :code:`/opt/mc-serve
 
 .. code-block:: yaml
 
-    version: '2'
+    version: "2"
 
     services:
       bungeecord_1:
         image: d3strukt0r/bungeecord
         ports:
           - 25565:25577
+        networks:
+          - internal
+        dns:
+          - 1.1.1.1
+          - 1.0.0.1
         volumes:
-          - ./data:/data
+          - ./bungeecord:/data
         environment:
-          - JAVA_MAX_MEMORY=1G
+          - JAVA_MAX_MEMORY=512M
 
-      lobby:
+      lobby_1:
         image: d3strukt0r/spigot
+        networks:
+          - internal
+        dns:
+          - 1.1.1.1
+          - 1.0.0.1
         volumes:
-          - ./data:/data
+          - ./lobby:/data
         environment:
           - JAVA_MAX_MEMORY=1G
           - EULA=true
+          - BUNGEECORD=true
+
+    networks:
+      internal:
+        external: false
+
 
 To be able to access the minecraft servers, you need to set the correct address in your
 :code:`config.yml`. The address basically is the name of the container. The port is the one that
@@ -36,11 +52,21 @@ example above, this would for example look like:
 
 .. code-block:: yaml
 
+    ...
     servers:
       lobby:
         motd: '&1Lobby'
-        address: spigot:25565
+        address: lobby_1:25565
         restricted: false
+    ...
+
+Also IP needs to be forwared:
+
+.. code-block:: yaml
+
+    ...
+    ip_forward: true
+    ...
 
 Starting the server
 ==========================

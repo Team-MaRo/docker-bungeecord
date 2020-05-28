@@ -23,22 +23,5 @@ jobs:
     - if: branch = master
       env: BUNGEECORD_JOB_ID=251 # 1.4.7
 
-before_install:
-  # Make file executable (Not by default)
-  - chmod 755 ./src/travis-push-to-docker.sh
-
-  # Login to make sure we have access to private dockers
-  - |
-    if [[ -v DOCKER_PASSWORD && -v DOCKER_USERNAME ]]; then
-      echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-    fi
-
 script:
-  - docker build --build-arg $BUNGEECORD_JOB_ID -t bungeecord .
-
-after_success:
-  # Upload the build
-  - |
-    if [[ -v DOCKER_PASSWORD && -v DOCKER_USERNAME ]]; then
-      ./src/travis-push-to-docker.sh
-    fi
+  - ./build/travis.sh
