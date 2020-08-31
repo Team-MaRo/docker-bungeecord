@@ -1,0 +1,34 @@
+name: Update versions
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Forward builds
+        run: |
+          declare -a ALL_VERSIONS
+          ALL_VERSIONS=(
+              1119 # 1.7.10
+              701 # 1.6.4
+              666 # 1.6.2
+              548 # 1.5.2
+              386 # 1.5.0
+              251 # 1.4.7
+          )
+
+          for i in "${ALL_VERSIONS[@]}"; do
+              curl \
+                  --silent \
+                  --request POST \
+                  --header "Authorization: Bearer ${{ secrets.PAT }}" \
+                  --header "Accept: application/vnd.github.v3+json" \
+                  --url https://api.github.com/repos/D3strukt0r/docker-bungeecord/actions/workflows/ci-cd.yml/dispatches \
+                  --data "{\"ref\":\"refs/heads/master\",\"inputs\":{\"version\":\"$i\"}}"
+          done
