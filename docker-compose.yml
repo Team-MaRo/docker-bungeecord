@@ -1,0 +1,35 @@
+version: "2"
+
+services:
+  bungeecord:
+    build:
+      context: .
+      cache_from:
+        - ${IMAGE_CACHE:-d3strukt0r/bungeecord}
+    image: ${IMAGE:-d3strukt0r/bungeecord}
+    ports:
+      - 25565:25577
+    networks:
+      - internal
+    volumes:
+      - bungeecord:/data
+      - ./docker/console.sh:/usr/local/bin/console
+
+  # lobby:
+  #   image: d3strukt0r/spigot
+  #   networks:
+  #     - internal
+  #   volumes:
+  #     - lobby:/data
+  #   environment:
+  #     - JAVA_MAX_MEMORY=1G
+  #     - EULA=true
+  #     - BUNGEECORD=true
+
+networks:
+  internal:
+    external: false
+
+volumes:
+  bungeecord:
+  lobby:

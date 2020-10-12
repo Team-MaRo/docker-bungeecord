@@ -7,7 +7,6 @@ Project
 [![License](https://img.shields.io/github/license/d3strukt0r/docker-bungeecord)][license]
 [![Docker Stars](https://img.shields.io/docker/stars/d3strukt0r/bungeecord.svg)][docker]
 [![Docker Pulls](https://img.shields.io/docker/pulls/d3strukt0r/bungeecord.svg)][docker]
-[![GH Action CI/CD](https://github.com/D3strukt0r/docker-bungeecord/workflows/Update%20versions/badge.svg)][gh-action]
 
 master-branch (alias stable, latest)
 
@@ -44,7 +43,7 @@ docker run \
     --rm \
     -d \
     -p 25565:25577 \
-    -v $(pwd)/data:/data \
+    -v $(pwd)/bungeecord:/app \
     -e JAVA_MAX_MEMORY=1G \
     -e <other variables> \
     --name bungeecord \
@@ -61,7 +60,7 @@ docker run \
 
 `-p 25565:25577`: This opens the internal port (inside the container) to the outer worlds. You can open as many ports as you want. This would maybe look like `-p 25565:25577 -p 8192:8192`.
 
-`-v $(pwd)/app:/app`: If you want to save your server somewhere, you need to link the directory inside your container to your host. Before the colon goes the place on your host. After the colon goes the directory inside the container, which is always `/app`.
+`-v $(pwd)/bungeecord:/app`: If you want to save your server somewhere, you need to link the directory inside your container to your host. Before the colon goes the place on your host. After the colon goes the directory inside the container, which is always `/app`.
 
 `-e JAVA_MAX_MEMORY=1G`: This is the equivalent of `-Xmx1G`. For the required amount of RAM you will need, please consult Google.
 
@@ -104,7 +103,7 @@ services:
       - 1.1.1.1
       - 1.0.0.1
     volumes:
-      - ./bungeecord:/data
+      - ./bungeecord:/app
     environment:
       - JAVA_MAX_MEMORY=512M
   lobby:
@@ -115,7 +114,7 @@ services:
       - 1.1.1.1
       - 1.0.0.1
     volumes:
-      - ./lobby:/data
+      - ./lobby:/app
     environment:
       - JAVA_MAX_MEMORY=1G
       - EULA=true

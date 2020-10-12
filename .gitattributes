@@ -82,3 +82,5 @@
 .gitkeep export-ignore
 
 # End of https://www.richie-bendall.ml/gitattributes-generator/
+
+Dockerfile text eol=lf

@@ -6,125 +6,418 @@ env:
 on:
   push:
     branches:
-      - master
-      - develop
+      - "**"
+    paths:
+      - .github/workflows/ci-cd.yml
+      - "docker/**"
+      - Dockerfile
 
-  # Run tests for any PRs.
   pull_request:
 
   workflow_dispatch:
     inputs:
       version:
-        description: "Version of BungeeCord"
+        description: "BungeeCord Job ID ('all', specific version)"
         required: true
-        default: "latest"
+        default: "lastStableBuild"
 
 jobs:
+  # https://docs.github.com/en/actions/reference/context-and-expression-syntax-for-github-actions#tojson
+  create-matrix:
+    runs-on: ubuntu-latest
+
+    name: Create Matrix
+
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+
+    steps:
+      - name: Create Matrix
+        id: set-matrix
+        run: |
+          default_versions=(
+              1119 # 1.7.10
+              701 # 1.6.4
+              666 # 1.6.2
+              548 # 1.5.2
+              386 # 1.5.0
+              251 # 1.4.7
+          )
+
+          if [ '${{ github.event_name }}' == 'push' ] && [ '${{ github.ref }}' == 'refs/heads/master' ]; then
+              versions=("${default_versions[@]}" 'lastStableBuild')
+          elif [ '${{ github.event_name }}' == 'push' ] && [ '${{ github.ref }}' == 'refs/heads/develop' ]; then
+              versions=lastStableBuild
+          elif [ '${{ github.event_name }}' == 'workflow_dispatch' ]; then
+              versions='${{ github.event.inputs.version }}'
+          else
+              exit 1
+          fi
+
+          versions_json=$(
+              printf '%s\n' "${versions[@]}" |
+              jq --raw-input . |
+              jq --compact-output --slurp '{bungeecord:.}'
+          )
+          echo "::set-output name=matrix::${versions_json}"
+
   # Run tests.
   # See also https://docs.docker.com/docker-hub/builds/automated-testing/
   test:
+    needs: create-matrix
+
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create-matrix.outputs.matrix) }}
+
+    name: Test BungeeCord ${{ matrix.bungeecord }}
+
+    # https://github.com/marketplace/actions/build-and-push-docker-images#local-registry
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Set variables
+      - name: Setup QEMU
+        id: qemu
+        uses: docker/setup-qemu-action@v1
+        # with:
+        #   # QEMU static binaries Docker image
+        #   image: tonistiigi/binfmt:latest # optional, default is "tonistiigi/binfmt"
+        #   # Platforms to install (e.g. arm64,riscv64,arm)
+        #   platforms: all # optional, default is "all"
+
+      - name: Setup Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          # Buildx version.
+          # version: latest # optional
+          # Sets the builder driver to be used
+          # driver: docker-container # optional, default is "docker-container"
+          # List of additional driver-specific options (eg. image=moby/buildkit:master)
+          driver-opts: network=host # optional
+          # Flags for buildkitd daemon (since buildx v0.3.0)
+          # buildkitd-flags: # optional
+          # Sets up docker build command as an alias to docker buildx
+          # install: false # optional, default is "false"
+          # Switch to this builder instance
+          # use: true # optional, default is "true"
+          # Optional address for docker socket or context from docker context ls
+          # endpoint: # optional
+
+      # https://github.com/marketplace/actions/build-and-push-docker-images#leverage-github-cache
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          # A list of files, directories, and wildcard patterns to cache and restore. See @actions/glob for supported patterns.
+          path: /tmp/.buildx-cache
+          # An explicit key for restoring and saving the cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}-${{ matrix.bungeecord }}
+          # An ordered list of keys to use for restoring the cache if no cache hit occurred for key
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ github.sha }}-
+            ${{ runner.os }}-buildx-
+
+      - name: Build
+        # Builds before 680 had a different URL
+        if: matrix.bungeecord < 680
+        uses: docker/build-push-action@v2
+        with:
+          # Builder instance (see setup-buildx action)
+          # builder: # optional
+          # Build's context is the set of files located in the specified PATH or URL
+          # context: . # optional, default is git context
+          # Path to the Dockerfile
+          # file: ./Dockerfile # optional, default is "Dockerfile"
+          # List of build-time variables
+          build-args: | # optional
+            BUNGEECORD_JOB_ID=${{ matrix.bungeecord }}
+            BUNGEECORD_FILE_URL=/artifact/proxy/target/BungeeCord.jar
+          # List of metadata for an image
+          # labels: # optional
+          # List of tags
+          tags: localhost:5000/name/app1:latest # optional
+          # Always attempt to pull a newer version of the image
+          # pull: false # optional, default is "false"
+          # Sets the target stage to build
+          # target: # optional
+          # List of extra privileged entitlement (eg. network.host,security.insecure)
+          # allow: # optional
+          # Do not use cache when building the image
+          # no-cache: false # optional, default is "false"
+          # List of target platforms for build
+          platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v7,linux/arm/v6 # optional
+          # Load is a shorthand for --output=type=docker
+          # load: false # optional, default is "false"
+          # Push is a shorthand for --output=type=registry
+          push: true # optional, default is "false"
+          # List of output destinations (format: type=local,dest=path)
+          # outputs: # optional
+          # List of external cache sources (eg. type=local,src=path/to/dir)
+          cache-from: type=local,src=/tmp/.buildx-cache # optional
+          # List of cache export destinations (eg. type=local,dest=path/to/dir)
+          cache-to: type=local,dest=/tmp/.buildx-cache # optional
+          # List of secrets to expose to the build (eg. key=value, GIT_AUTH_TOKEN=mytoken)
+          # secrets: # optional
+
+      - name: Build
+        if: matrix.bungeecord >= 680 || matrix.bungeecord == 'lastStableBuild'
+        uses: docker/build-push-action@v2
+        with:
+          # Builder instance (see setup-buildx action)
+          # builder: # optional
+          # Build's context is the set of files located in the specified PATH or URL
+          # context: . # optional, default is git context
+          # Path to the Dockerfile
+          # file: ./Dockerfile # optional, default is "Dockerfile"
+          # List of build-time variables
+          build-args: BUNGEECORD_JOB_ID=${{ matrix.bungeecord }} # optional
+          # List of metadata for an image
+          # labels: # optional
+          # List of tags
+          tags: localhost:5000/name/app1:latest # optional
+          # Always attempt to pull a newer version of the image
+          # pull: false # optional, default is "false"
+          # Sets the target stage to build
+          # target: # optional
+          # List of extra privileged entitlement (eg. network.host,security.insecure)
+          # allow: # optional
+          # Do not use cache when building the image
+          # no-cache: false # optional, default is "false"
+          # List of target platforms for build
+          platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v7,linux/arm/v6 # optional
+          # Load is a shorthand for --output=type=docker
+          # load: false # optional, default is "false"
+          # Push is a shorthand for --output=type=registry
+          push: true # optional, default is "false"
+          # List of output destinations (format: type=local,dest=path)
+          # outputs: # optional
+          # List of external cache sources (eg. type=local,src=path/to/dir)
+          cache-from: type=local,src=/tmp/.buildx-cache # optional
+          # List of cache export destinations (eg. type=local,dest=path/to/dir)
+          cache-to: type=local,dest=/tmp/.buildx-cache # optional
+          # List of secrets to expose to the build (eg. key=value, GIT_AUTH_TOKEN=mytoken)
+          # secrets: # optional
+
+      - name: Inspect
         run: |
-          # Strip git ref prefix from version
-          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
-
-          # Strip "v" prefix from tag name
-          [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
-
-          # Figure out correct MC version
-          BUNGEECORD_JOB_ID=lastStableBuild
-
-          if [ "$VERSION" != "master" ] && [ "$VERSION" != "develop" ]; then
-              BUNGEECORD_JOB_ID=$VERSION
-          fi
-
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.version }}" != "latest" ]; then
-              BUNGEECORD_JOB_ID=${{ github.event.inputs.version }}
-          fi
-
-          echo "VERSION=$VERSION"
-          echo "BUNGEECORD_JOB_ID=$BUNGEECORD_JOB_ID"
-          echo "::set-env name=BUNGEECORD_JOB_ID::$BUNGEECORD_JOB_ID"
-
-      - name: Run tests
-        run: |
-          if [ -f docker-compose.test.yml ]; then
-            docker-compose --file docker-compose.test.yml build
-            docker-compose --file docker-compose.test.yml run sut
-          else
-            docker build . --file Dockerfile --build-arg "BUNGEECORD_JOB_ID=$BUNGEECORD_JOB_ID"
-          fi
+          docker buildx imagetools inspect localhost:5000/name/app1:latest
 
   # Push image to GitHub Packages.
   # See also https://docs.docker.com/docker-hub/builds/
-  push:
+  deploy:
     # Ensure test job passes before pushing image.
-    # needs: test
+    needs: [create-matrix, test]
 
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/develop') && github.repository == 'D3strukt0r/docker-bungeecord'
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.create-matrix.outputs.matrix) }}
+
+    name: Push BungeeCord ${{ matrix.bungeecord }}
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v2
 
-      - name: Set variables
+      - name: Prepare
+        id: prep
         run: |
-          IMAGE_ID=${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME
-
-          # Change all uppercase to lowercase
-          IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
+          DOCKER_IMAGE="$(echo "${{ secrets.DOCKER_USERNAME }}/$IMAGE_NAME" | tr '[A-Z]' '[a-z]')"
 
           # Strip git ref prefix from version
           VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
 
-          # Strip "v" prefix from tag name
-          [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
-
-          # Figure out correct BungeeCord version
-          BUNGEECORD_JOB_ID=lastStableBuild
-
-          if [ "$VERSION" == "master" ]; then
-              DOCKER_VERSION=latest
-          elif [ "$VERSION" == "develop" ]; then
-              DOCKER_VERSION=nightly
+          # Rename branches which stand for latest or similar
+          if [ '${{ matrix.bungeecord }}' = 'lastStableBuild' ]; then
+            if [ "$VERSION" = '${{ github.event.repository.default_branch }}' ]; then
+              VERSION=latest
+            elif [ "$VERSION" = 'develop' ]; then
+              VERSION=nightly
+            else
+              # Rename my/branch to my-branch
+              VERSION=$(echo "$VERSION" | sed -r 's#/+#-#g')
+            fi
           else
-              SPIGOT_VERSION=$VERSION
-              DOCKER_VERSION=$VERSION
+            VERSION='${{ matrix.bungeecord }}'
           fi
 
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ github.event.inputs.version }}" == "latest" ]; then
-              if [ "$VERSION" == "master" ]; then
-                  DOCKER_VERSION=latest
-              elif [ "$VERSION" == "develop" ]; then
-                  DOCKER_VERSION=nightly
-              fi
-          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-              BUNGEECORD_JOB_ID=${{ github.event.inputs.version }}
-              DOCKER_VERSION=${{ github.event.inputs.version }}
+          # Strip "v" prefix from tag name
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=$(echo $VERSION | sed -e 's/^v//')
           fi
 
-          echo "IMAGE_ID=$IMAGE_ID"
-          echo "::set-env name=IMAGE_ID::$IMAGE_ID"
-          echo "BUNGEECORD_JOB_ID=$BUNGEECORD_JOB_ID"
-          echo "::set-env name=BUNGEECORD_JOB_ID::$BUNGEECORD_JOB_ID"
-          echo "DOCKER_VERSION=$DOCKER_VERSION"
-          echo "::set-env name=DOCKER_VERSION::$DOCKER_VERSION"
+          # Create tags
+          TAGS="${DOCKER_IMAGE}:${VERSION}"
 
-      - name: Build image
-        run: docker build . --file Dockerfile --tag $IMAGE_NAME --build-arg "BUNGEECORD_JOB_ID=$BUNGEECORD_JOB_ID"
+          echo "::set-output name=version::${VERSION}"
+          echo "::set-output name=tags::${TAGS}"
+          echo "::set-output name=created::$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
-      - name: Log into registry
-        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u ${{ secrets.DOCKER_USERNAME }} --password-stdin
+      - name: Setup QEMU
+        id: qemu
+        uses: docker/setup-qemu-action@v1
+        # with:
+        #   # QEMU static binaries Docker image
+        #   image: tonistiigi/binfmt:latest # optional, default is "tonistiigi/binfmt"
+        #   # Platforms to install (e.g. arm64,riscv64,arm)
+        #   platforms: all # optional, default is "all"
 
-      - name: Push image to Docker Hub
-        run: |
-          docker tag $IMAGE_NAME $IMAGE_ID:$DOCKER_VERSION
-          docker push $IMAGE_ID:$DOCKER_VERSION
+      - name: Setup Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          # Buildx version.
+          version: latest # optional
+          # Sets the builder driver to be used
+          # driver: docker-container # optional, default is "docker-container"
+          # List of additional driver-specific options (eg. image=moby/buildkit:master)
+          # driver-opts: | # optional
+          #   image=moby/buildkit:master
+          #   network=host
+          # Flags for buildkitd daemon (since buildx v0.3.0)
+          # buildkitd-flags: # optional
+          # Sets up docker build command as an alias to docker buildx
+          # install: false # optional, default is "false"
+          # Switch to this builder instance
+          # use: true # optional, default is "true"
+          # Optional address for docker socket or context from docker context ls
+          # endpoint: # optional
+
+      # https://github.com/marketplace/actions/build-and-push-docker-images#leverage-github-cache
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          # A list of files, directories, and wildcard patterns to cache and restore. See @actions/glob for supported patterns.
+          path: /tmp/.buildx-cache
+          # An explicit key for restoring and saving the cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}-${{ matrix.bungeecord }}
+          # An ordered list of keys to use for restoring the cache if no cache hit occurred for key
+          restore-keys: |
+            ${{ runner.os }}-buildx-${{ github.sha }}-
+            ${{ runner.os }}-buildx-
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v1
+        with:
+          # Server address of Docker registry. If not set then will default to Docker Hub
+          # registry: # optional, default is docker registry
+          # Username used to log against the Docker registry
+          username: ${{ secrets.DOCKER_USERNAME }}
+          # Password or personal access token used to log against the Docker registry
+          password: ${{ secrets.DOCKER_PASSWORD }}
+          # Log out from the Docker registry at the end of a job
+          # logout: true # optional, default is "true"
+
+      - name: Build and push
+        # Builds before 680 had a different URL
+        if: matrix.bungeecord < 680
+        id: docker_build_api_php
+        uses: docker/build-push-action@v2
+        with:
+          # Builder instance (see setup-buildx action)
+          # builder:
+          # Build's context is the set of files located in the specified PATH or URL
+          # context: . # default is "<Git context>"
+          # Path to the Dockerfile
+          # file: ./Dockerfile # default is "Dockerfile"
+          # List of build-time variables
+          build-args: | # optional
+            BUNGEECORD_JOB_ID=${{ matrix.bungeecord }}
+            BUNGEECORD_FILE_URL=/artifact/proxy/target/BungeeCord.jar
+          # List of metadata for an image
+          # https://github.com/opencontainers/image-spec/blob/master/annotations.md
+          labels: | # optional
+            maintainer=Manuele Vaccari <manuele.vaccari@gmail.com>
+            org.opencontainers.image.created=${{ steps.prep.outputs.created }}
+            org.opencontainers.image.url=${{ github.event.repository.html_url }}
+            org.opencontainers.image.source=${{ github.event.repository.clone_url }}
+            org.opencontainers.image.version=${{ steps.prep.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=${{ github.event.repository.name }}
+            org.opencontainers.image.description=${{ github.event.repository.description }}
+            org.opencontainers.image.licenses=${{ github.event.repository.license.spdx_id }}
+          # List of tags
+          tags: ${{ steps.prep.outputs.tags }}
+          # Always attempt to pull a newer version of the image
+          # pull: false # optional, default is "false"
+          # Sets the target stage to build
+          # target: # optional
+          # List of extra privileged entitlement (eg. network.host,security.insecure)
+          # allow: # optional
+          # Do not use cache when building the image
+          # no-cache: false # optional, default is "false"
+          # List of target platforms for build
+          platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v7,linux/arm/v6 # optional
+          # Load is a shorthand for --output=type=docker
+          # load: false # optional, default is "false"
+          # Push is a shorthand for --output=type=registry
+          push: ${{ github.event_name != 'pull_request' }} # optional, default is "false"
+          # List of output destinations (format: type=local,dest=path)
+          # outputs: # optional
+          # List of external cache sources (eg. type=local,src=path/to/dir)
+          cache-from: type=local,src=/tmp/.buildx-cache # optional
+          # List of cache export destinations (eg. type=local,dest=path/to/dir)
+          cache-to: type=local,dest=/tmp/.buildx-cache # optional
+          # List of secrets to expose to the build (eg. key=value, GIT_AUTH_TOKEN=mytoken)
+          # secrets: # optional
+
+      - name: Build and push
+        if: matrix.bungeecord >= 680 || matrix.bungeecord == 'lastStableBuild'
+        id: docker_build_api_nginx
+        uses: docker/build-push-action@v2
+        with:
+          # Builder instance (see setup-buildx action)
+          # builder:
+          # Build's context is the set of files located in the specified PATH or URL
+          # context: . # default is "<Git context>"
+          # Path to the Dockerfile
+          # file: ./Dockerfile # default is "Dockerfile"
+          # List of build-time variables
+          build-args: BUNGEECORD_JOB_ID=${{ matrix.bungeecord }} # optional
+          # List of metadata for an image
+          # https://github.com/opencontainers/image-spec/blob/master/annotations.md
+          labels: | # optional
+            maintainer=Manuele Vaccari <manuele.vaccari@gmail.com>
+            org.opencontainers.image.created=${{ steps.prep.outputs.created }}
+            org.opencontainers.image.url=${{ github.event.repository.html_url }}
+            org.opencontainers.image.source=${{ github.event.repository.clone_url }}
+            org.opencontainers.image.version=${{ steps.prep.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=${{ github.event.repository.name }}
+            org.opencontainers.image.description=${{ github.event.repository.description }}
+            org.opencontainers.image.licenses=${{ github.event.repository.license.spdx_id }}
+          # List of tags
+          tags: ${{ steps.prep.outputs.tags }}
+          # Always attempt to pull a newer version of the image
+          # pull: false # optional, default is "false"
+          # Sets the target stage to build
+          # target: # optional
+          # List of extra privileged entitlement (eg. network.host,security.insecure)
+          # allow: # optional
+          # Do not use cache when building the image
+          # no-cache: false # optional, default is "false"
+          # List of target platforms for build
+          platforms: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x,linux/386,linux/arm/v7,linux/arm/v6 # optional
+          # Load is a shorthand for --output=type=docker
+          # load: false # optional, default is "false"
+          # Push is a shorthand for --output=type=registry
+          push: ${{ github.event_name != 'pull_request' }} # optional, default is "false"
+          # List of output destinations (format: type=local,dest=path)
+          # outputs: # optional
+          # List of external cache sources (eg. type=local,src=path/to/dir)
+          cache-from: type=local,src=/tmp/.buildx-cache # optional
+          # List of cache export destinations (eg. type=local,dest=path/to/dir)
+          cache-to: type=local,dest=/tmp/.buildx-cache # optional
+          # List of secrets to expose to the build (eg. key=value, GIT_AUTH_TOKEN=mytoken)
+          # secrets: # optional
