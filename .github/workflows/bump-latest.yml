@@ -1,0 +1,103 @@
+name: Bump latest build
+
+# BungeeCord's `lastStableBuild` is a moving pointer; a hash-pinned fetch would go
+# stale the moment SpigotMC publishes a new build. This resolves the pointer to a
+# concrete build NUMBER, pins its jar hash + Minecraft version into versions.json,
+# and commits it straight to the default branch (using GH_PAT, the CI account that
+# bypasses commit restrictions). We pin the last build of every Minecraft version:
+# a new build of the CURRENT version rolls that entry forward, while a build of a
+# NEW version is added (freezing the previous version's last build as a permanent
+# pin).
+on:
+  schedule:
+    - cron: '15 8 * * 1' # Mondays 08:15 UTC (before the docker rebuild)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bump-latest-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Cloudflare in front of hub.spigotmc.org 403s non-browser User-Agents.
+  UA: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    name: Pin lastStableBuild
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # The CI PAT — its account bypasses branch protection, so we commit
+          # directly instead of opening a PR. Also makes `git push` use this token.
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve + pin lastStableBuild
+        id: bump
+        run: |
+          set -euo pipefail
+          api="https://hub.spigotmc.org/jenkins/job/BungeeCord/lastStableBuild/api/json?tree=number"
+          build="$(curl -gfsSL -H "User-Agent: $UA" -H 'Accept: application/json' "$api" | jq -r '.number')"
+          [ -n "$build" ] && [ "$build" != null ] || { echo "could not resolve lastStableBuild"; exit 1; }
+          echo "Resolved lastStableBuild = $build"
+
+          if jq -e --arg b "$build" 'has($b)' versions.json >/dev/null; then
+            echo "build $build already pinned — nothing to do"
+            echo "changed=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sub=$([ "$build" -lt 680 ] && echo proxy || echo bootstrap)
+          url="https://hub.spigotmc.org/jenkins/job/BungeeCord/${build}/artifact/${sub}/target/BungeeCord.jar"
+          curl -gfsSL -H "User-Agent: $UA" -H 'Accept: */*' -o bc.jar "$url"
+
+          # SRI hash (sha256-<base64>) — matches what nix fetchurl expects.
+          sha="sha256-$(openssl dgst -sha256 -binary bc.jar | base64 -w0)"
+          # Minecraft version from the jar manifest (e.g. "…Bootstrap:26.1-R0.1-SNAPSHOT:…" -> 26.1).
+          mc="$(unzip -p bc.jar META-INF/MANIFEST.MF | tr -d '\r' \
+                | sed -nE 's/.*Bootstrap[:-]([0-9][0-9.]*)(-R.*)?.*/\1/p' | head -n1)"
+          [ -n "$mc" ] || mc="unknown"
+          echo "build=$build mc=$mc sha=$sha"
+
+          # Pin the last build per Minecraft version: drop any existing entry of the
+          # SAME version (roll it forward), then add this build. A new version is
+          # simply added, freezing the previous version's last build. Newest build
+          # first (descending) for readability.
+          jq --arg b "$build" --arg mc "$mc" --arg sha "$sha" '
+            (to_entries | map(select(.value.mc != $mc)) | from_entries)
+            + { ($b): { "mc": $mc, "sha256": $sha } }
+            | to_entries | sort_by(.key|tonumber) | reverse | from_entries
+          ' versions.json > versions.json.new
+          mv versions.json.new versions.json
+
+          {
+            echo "changed=1"
+            echo "build=$build"
+            echo "mc=$mc"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit directly (amend if the previous commit was a bump)
+        if: steps.bump.outputs.changed == '1'
+        run: |
+          set -euo pipefail
+          git add versions.json
+          msg="chore: pin BungeeCord build ${{ steps.bump.outputs.build }} (Minecraft ${{ steps.bump.outputs.mc }})"
+          branch="${GITHUB_REF#refs/heads/}"
+          # Collapse consecutive rolling-latest bumps into one commit: if the current
+          # tip is itself a bump commit, amend it (force-push) instead of stacking.
+          if git log -1 --pretty=%s | grep -q '^chore: pin BungeeCord build '; then
+            git commit --amend -m "$msg"
+            git push --force-with-lease origin "HEAD:$branch"
+          else
+            git commit -m "$msg"
+            git push origin "HEAD:$branch"
+          fi

@@ -1,225 +1,276 @@
 # docker-bungeecord
 
-Use the BungeeCord Proxy as a Docker App.
+Run the [BungeeCord](https://www.spigotmc.org/wiki/bungeecord/) Minecraft proxy as a reproducible,
+multi-architecture Docker image, built with Nix.
 
-Project
-
-[![License](https://img.shields.io/github/license/d3strukt0r/docker-bungeecord)][license]
+[![License](https://img.shields.io/github/license/Team-MaRo/docker-bungeecord)](LICENSE.txt)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.0-4baaaa)][code-of-conduct]
 [![Docker Stars](https://img.shields.io/docker/stars/d3strukt0r/bungeecord.svg)][docker]
 [![Docker Pulls](https://img.shields.io/docker/pulls/d3strukt0r/bungeecord.svg)][docker]
 
-master-branch (alias stable, latest)
-
-[![GH Action CI/CD](https://github.com/D3strukt0r/docker-bungeecord/workflows/CI/CD/badge.svg?branch=master)][gh-action]
+[![Docker](https://github.com/Team-MaRo/docker-bungeecord/actions/workflows/docker.yml/badge.svg)][gh-action]
 [![Codacy grade](https://img.shields.io/codacy/grade/80a7f4cf799248ccad6f24e504a88c24/master)][codacy]
 
-<!--
-develop-branch (alias nightly)
+## How it is built
 
-[![GH Action CI/CD](https://github.com/D3strukt0r/docker-bungeecord/workflows/CI/CD/badge.svg?branch=develop)][gh-action]
-[![Codacy grade](https://img.shields.io/codacy/grade/80a7f4cf799248ccad6f24e504a88c24/develop)][codacy]
--->
+`flake.nix` produces one image per BungeeCord Jenkins **build number** with
+`dockerTools.streamLayeredImage`. The BungeeCord jar is a hash-pinned fetch from the SpigotMC
+Jenkins (`versions.json`), the runtime JDK is chosen per build (`jdk-boundaries.json`), and the
+proxy runs behind [`mc-server-init`](https://github.com/Team-MaRo/mc-server-init) as PID 1 (PTY
+console, named-pipe command injection, and a graceful `end` on `SIGTERM`). Images are built for
+`linux/amd64` and `linux/arm64` and published as a single multi-arch manifest, signed with cosign,
+with an SBOM and SLSA provenance.
 
-## Getting Started
+## Tags
 
-These instructions will cover usage information and for the docker container
+Published on [Docker Hub][docker]:
 
-### Prerequisities
+| Tag | Meaning |
+| --- | --- |
+| `latest` | The newest stable build (also tagged with its build number) |
+| `<build>` | A specific Jenkins build number, e.g. `2080`, `1119` |
+| `<mc>` | The Minecraft version that build targets, e.g. `26.1`, `1.7.10` |
 
-In order to run this container you'll need docker installed.
+Every Minecraft version BungeeCord has supported is published — the **last build before support
+moved to the next version** — each tagged with both its Minecraft version and its build number
+(`1.21` and `2053` point at the same image). `latest` follows the newest. Modern BungeeCord is
+multi-protocol, so e.g. the `1.16` image also accepts 1.8–1.16 clients; pick the tag for the
+*newest* version you need.
 
--   [Windows](https://docs.docker.com/docker-for-windows/install/)
--   [OS X](https://docs.docker.com/docker-for-mac/install/)
--   [Linux](https://docs.docker.com/install/linux/docker-ce/ubuntu/)
+| Minecraft | Build | Runtime JDK |
+| --------- | ----- | ----------- |
+| `26.1` (= `latest`) | `2080` | 21 |
+| `1.21` | `2053` | 17 |
+| `1.20` | `1848` | 17 |
+| `1.19` | `1708` | 11 |
+| `1.18` | `1636` | 11 |
+| `1.17` | `1609` | 11 |
+| `1.16` | `1575` | 8 |
+| `1.15` | `1500` | 8 |
+| `1.14` | `1425` | 8 |
+| `1.13` | `1402` | 8 |
+| `1.12` | `1329` | 8 |
+| `1.11` | `1232` | 8 |
+| `1.10` | `1199` | 8 |
+| `1.9` | `1157` | 8 |
+| `1.7.10` | `1119` | 8 |
+| `1.6.2` | `666` | 8 |
+| `1.5.2` | `548` | 8 |
+| `1.5.0` | `386` | 8 |
+| `1.4.7` | `251` | 8 |
 
-### Usage
+Each image runs on the **JDK it was compiled with** — the Java that was current when that build was
+made (its manifest `Build-Jdk`), floored to JDK 8 (nixpkgs has no JRE 7). Verified `Build-Jdk`
+transitions: Java **8→11 at build 1604**, **11→17 at 1724**, **17→21 at 2063**. All assignments
+verified by booting. `jdk-boundaries.json` records the minimum and desired JRE per range; the version
+list is discovered from each jar's manifest and kept current by `bump-latest.yml`.
 
-#### Using Docker
+Two runtime constraints found while testing (the contemporary-JDK choice steers clear of both):
 
-##### Starting a server
+- **JDK 17 is required from build 2054** (Minecraft 26.1): its `Bootstrap` refuses to start on
+  anything older — that's the `min` jump to 17 in `jdk-boundaries.json`.
+- **Builds 948–1604** (Minecraft 1.8–1.16) embed a `SecurityManager`, which JDK **24 removed**, so
+  those builds cannot run on JRE 24+ (they run fine on their contemporary 8/11).
+
+> No dedicated `1.8` tag: build 1119 is both the last 1.7.10-protocol build and the last `1.8`
+> project build, so it's published as `1.7.10`; any `1.9`+ image proxies 1.8 clients too. And build
+> `701` (1.6.4) is **not published** — its bootstrap hard-requires Java **7**
+> (`java.version.startsWith("1.7")`), and no Java 7 runtime is available via nixpkgs (nor reliably
+> on arm64).
+
+## Usage
 
 ```shell
-docker run \
-    --rm \
-    -d \
-    -p 25565:25577 \
-    -v $(pwd)/bungeecord:/app \
-    -e JAVA_MAX_MEMORY=1G \
-    -e <other variables> \
+docker run --rm -d \
+    -p 25565:25565 \
+    -v "$(pwd)/bungeecord:/srv/bungeecord" \
     --name bungeecord \
     d3strukt0r/bungeecord
 ```
 
-`--rm`: Removes the container after it has been shut down. This means we can reuse the name later on.
+- `-p 25565:25565` — the proxy listens on **25565** (the conventional Minecraft port). The image
+  defaults BungeeCord's listener to 25565; override it with e.g. `-e BUNGEE__LISTENERS__0__HOST=0.0.0.0:25577`.
+- `-v …:/srv/bungeecord` — persist `config.yml`, `modules/`, `plugins/`, and logs. The container
+  runs as a non-root user (uid 65532); make sure the host directory is writable by it.
+- Pick a tag (`d3strukt0r/bungeecord:1119`) to pin a specific build.
 
-`-d`: Start detached. Or leave out to watch the logs. You can then leave using `CTRL + D`
+### Sending commands
 
-<!--
-`-i -t` (WORK IN PROGRESS): This will let you work with the console inside your container. However, this will not let you leave but not re-enter the console, without shutting down the server. Later on, you'll learn a workaround for this. To leave from the terminal, and let it run in the background click `CTRL + P + Q` (lift from `P` and click `Q` while still holding `CTRL`)
--->
-
-`-p 25565:25577`: This opens the internal port (inside the container) to the outer worlds. You can open as many ports as you want. This would maybe look like `-p 25565:25577 -p 8192:8192`.
-
-`-v $(pwd)/bungeecord:/app`: If you want to save your server somewhere, you need to link the directory inside your container to your host. Before the colon goes the place on your host. After the colon goes the directory inside the container, which is always `/app`.
-
-`-e JAVA_MAX_MEMORY=1G`: This is the equivalent of `-Xmx1G`. For the required amount of RAM you will need, please consult Google.
-
-`--name bungeecord`: Give the container a name, for easier referencing later on.
-
-`d3strukt0r/bungeecord`: This is the repository where the container is maintained. You can also specify what version you want to use. e. g. `d3strukt0r/bungeecord:latest` or `d3strukt0r/bungeecord:548`. For all versions check the [Tags on Docker Hub](https://hub.docker.com/repository/docker/d3strukt0r/bungeecord/tags).
-
-##### Reading the logs
-
-While running you can access the output with `docker logs -f <container name>` and leave with `CTRL + Q`.
-
-`-f`: To not just output the logs until now, but keep reading, until we exit with `CTRL + D`. This will not close the server, you'll just leave the logs.
-
-##### Sending commands
-
-To send a command through the console to BungeeCord, use `docker exec <container name> console "<command>"`.
-
-Replace `<command>` with the command you need. This is what you would also usually enter
-inside your regular console, like e. g. `op D3strukt0r`.
-
-##### Stopping the server
-
-At the end to shut everything down use `docker stop <container name>`
-
-#### Using Docker Compose (docker-compose.yml)
-
-Create a file called `docker-compose.yml`
-
-```yaml
-version: "2"
-
-services:
-  bungeecord:
-    image: d3strukt0r/bungeecord
-    ports:
-      - 25565:25577
-    networks:
-      - internal
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    volumes:
-      - ./bungeecord:/app
-    environment:
-      - JAVA_MAX_MEMORY=512M
-  lobby:
-    image: d3strukt0r/spigot
-    networks:
-      - internal
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
-    volumes:
-      - ./lobby:/app
-    environment:
-      - JAVA_MAX_MEMORY=1G
-      - EULA=true
-      - BUNGEECORD=true
-
-networks:
-  internal:
-    external: false
+```shell
+docker exec bungeecord console "<command>"
 ```
 
-To be able to access the minecraft servers, you need to set the correct address in your `config.yml`. The address basically is the name of the container. The port is the one that is configured under `server.properties` inside Spigot (by default `25565`). With the example above, this would for example look like:
+`console` injects a line into the running proxy's stdin via a named pipe (no RCON). You can also
+attach interactively with `docker attach bungeecord`.
 
-```yaml
-...
+### Stopping
+
+```shell
+docker stop bungeecord
+```
+
+`mc-server-init` turns `SIGTERM`/`SIGINT` into BungeeCord's graceful `end` command, then `SIGKILL`s
+only if it doesn't shut down in time.
+
+### Docker Compose
+
+See [`compose.yml`](compose.yml) for a proxy + backend-server example.
+
+## Configuration
+
+### Environment variables
+
+All variables also support Docker Secrets: append `_FILE` (e.g. `MEMORY_FILE`) and point it at a
+file such as `/run/secrets/<name>`.
+
+| Variable | Default | Description |
+| -------- | ------- | ----------- |
+| `MEMORY` | _(unset)_ | Heap size; sets both `-Xms` and `-Xmx`. `K`/`M`/`G` suffix. Unset = the JVM's own (container-aware) default heap sizing. |
+| `INIT_MEMORY` | `${MEMORY}` | Initial heap (`-Xms`) override. |
+| `MAX_MEMORY` | `${MEMORY}` | Max heap (`-Xmx`) override. |
+| `JVM_FLAGS_PRESET` | `none` | GC/tuning flag set: `none` or `velocity` (PaperMC proxy flags). |
+| `JVM_OPTS` | | Extra raw JVM arguments. |
+
+To pass arguments to BungeeCord itself, just append them to the container command — if the first
+one starts with `-` they're forwarded straight to the proxy, e.g.
+`docker run … d3strukt0r/bungeecord --noconsole`. (A non-option command such as `bash` instead runs
+as an override: `docker run -it … d3strukt0r/bungeecord bash`.)
+
+### config.yml from the environment
+
+Any `BUNGEE__…` variable is written into `config.yml`. `__` separates path segments, an all-digits
+segment is a list index, and values are YAML-typed:
+
+```shell
+-e BUNGEE__ONLINE_MODE=false      # online_mode: false
+-e BUNGEE__PLAYER_LIMIT=100       # player_limit: 100
+-e BUNGEE__IP_FORWARD=true        # ip_forward: true
+-e BUNGEE__LISTENERS__0__MOTD=Hi  # listeners[0].motd: "Hi"
+```
+
+Quote a value that must stay a string but looks numeric. For list-heavy sections (`listeners`,
+`servers`) it is usually simpler to mount your own `config.yml` into `/srv/bungeecord`.
+
+## Example configuration file
+
+BungeeCord generates `config.yml` in the `/srv/bungeecord` volume on first start. The sample below
+shows the defaults (the image only changes the listener `host` to `0.0.0.0:25565`); these are the
+keys you can override with `BUNGEE__…` env vars.
+
+<details>
+<summary>Example <code>config.yml</code></summary>
+
+```yml
+connection_throttle_limit: 3
+online_mode: true
+log_commands: false
+network_compression_threshold: 256
+listeners:
+- query_port: 25577
+  motd: '&1Another Bungee server'
+  tab_list: SERVER
+  query_enabled: false
+  proxy_protocol: false
+  forced_hosts:
+    pvp.md-5.net: pvp
+  ping_passthrough: false
+  priorities:
+  - lobby
+  bind_local_address: true
+  host: 0.0.0.0:25565
+  max_players: 500
+  tab_size: 60
+  force_default_server: false
+connection_throttle: 4000
+log_pings: true
+ip_forward: true
+prevent_proxy_connections: false
+forge_support: false
+stats: 287a5297-3c79-...
+inject_commands: true
+disabled_commands:
+- disabledcommandhere
+groups:
+  D3strukt0r:
+  - admin
+  - moderator
+timeout: 30000
+permissions:
+  default:
+  - bungeecord.command.server
+  - bungeecord.command.list
+  moderator:
+  - bungeecord.command.find
+  - bungeecord.command.send
+  - bungeecord.command.ip
+  - bungeecord.command.alert
+  admin:
+  - bungeecord.command.end
+  - bungeecord.command.reload
 servers:
   lobby:
-    motd: '&1Lobby'
-    address: lobby_1:25565
+    motd: '&1Just another BungeeCord - Forced Host'
+    address: localhost:25566
     restricted: false
-...
+player_limit: -1
 ```
 
-Also IP needs to be forwared:
+</details>
 
-```yaml
-...
-ip_forward: true
-...
-```
+## Volumes & ports
 
-##### Compose: Starting a server
+- `/srv/bungeecord` — server working directory (config, modules, plugins, logs).
+- `25565/tcp` — proxy listener.
 
-To start the server use `docker-compose up` or `docker-compose up -d` for starting detached (in the background).  When running without `-d`, you can still detach with `CTRL + P` followed by `CTRL + Q`.
+## Built with
 
-##### Compose: Reading the logs
-
-While running you can access the output with `docker-compose logs -f` and leave with `CTRL + Q`.
-
-##### Compose: Sending commands
-
-To send a command through the console to BungeeCord, use `docker-compose exex <container name> console "<command>"`.
-
-##### Compose: Stopping the server
-
-At the end to shut everything down use `docker-compose down`
-
-#### Environment Variables
-
-All environment variables support Docker Secrets. To learn more about Docker Secrets, read [here](https://docs.docker.com/engine/swarm/secrets/).
-
-Basically, after creating a secret, append a `_FILE` (e. g. `JAVA_OPTIONS_FILE`) after the environment variable and set the path to something like `/run/secrets/<something>`.
-
--   `JAVA_MEMORY` - The memory java can use. Any integer followed by `K` (Kilobyte), `M` (Megabyte) or `G` (Gigabyte) (Default: `512M`)
--   `JAVA_BASE_MEMORY` - The memory java can use at startup. Any integer followed by `K` (Kilobyte), `M` (Megabyte) or `G` (Gigabyte) (Default: `${JAVA_MEMORY}`)
--   `JAVA_MAX_MEMORY` - The maximum memory the application can use. Recommended is `512M` for each 500 users. Any integer followed by `K` (Kilobyte), `M` (Megabyte) or `G` (Gigabyte) (Default: `${JAVA_MEMORY}`)
--   `JAVA_OPTIONS` - Any `java` argument (Default: )
-
-#### Volumes
-
--   `/app` - All the data, like: configs, plugins, logs, icons
-
-#### Useful File Locations
-
--   `/usr/local/bin/console` - Can send a command to BungeeCord indirectly
-
-## Built With
-
--   [OpenJDK](https://hub.docker.com/_/openjdk) - The Java conatainer in Docker
--   [BungeeCord](https://ci.md-5.net/job/BungeeCord/) - The main software
--   [Github Actions](https://github.com/features/actions) - Automatic CI (Testing) / CD (Deployment)
--   [Docker](https://www.docker.com/) - Building a Container for the Server
-
-## Find Us
-
--   [GitHub](https://github.com/D3strukt0r/docker-bungeecord)
--   [Docker Hub](https://hub.docker.com/r/d3strukt0r/bungeecord)
+- [Nix](https://nixos.org/) — reproducible, multi-arch image builds
+- [BungeeCord](https://hub.spigotmc.org/jenkins/job/BungeeCord/) — the proxy software
+- [mc-server-init](https://github.com/Team-MaRo/mc-server-init) — PID-1 console/signal handling
+- [GitHub Actions](https://github.com/features/actions) — CI/CD
 
 ## Contributing
 
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct, and the process for submitting pull requests to us.
+Please read [CONTRIBUTING.md][contributing] for details on our code of conduct and the process for submitting pull requests.
 
 ## Versioning
 
-There is no versioning in this project. Only the develop for nightly builds, and the master branch which builds latest and all minecraft versions.
+There is no project-specific versioning.
 
 ## Authors
 
--   **Manuele Vaccari** - [D3strukt0r](https://github.com/D3strukt0r) - _Initial work_
+### Special thanks for all the people who had helped this project so far
 
-See also the list of [contributors](https://github.com/D3strukt0r/docker-bungeecord/contributors) who participated in this project.
+- **Manuele** - [D3strukt0r](https://github.com/D3strukt0r)
+
+See also the full list of [contributors][gh-contributors] who participated in this project.
+
+### I would like to join this list. How can I help the project?
+
+We're currently looking for contributions for the following:
+
+- [ ] Bug fixes
+- [ ] Translations
+- [ ] etc...
+
+For more information, please refer to our [CONTRIBUTING.md][contributing] guide.
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE.txt](LICENSE.txt) file for details
+This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
 
 ## Acknowledgments
 
--   Geoff Bourne with [itzg/docker-bungeecord](https://github.com/itzg/docker-bungeecord)
--   James Rehfeld with [rehf27/docker-bungeecord](https://github.com/rehf27/docker-bungeecord)
--   Leopere with [Leopere/docker-bungeecord](https://github.com/Leopere/docker-bungeecord)
--   Hat tip to anyone whose code was used
--   Inspiration
--   etc
+- Geoff Bourne with [itzg/docker-bungeecord](https://github.com/itzg/docker-bungeecord)
+- James Rehfeld with [rehf27/docker-bungeecord](https://github.com/rehf27/docker-bungeecord)
+- Leopere with [Leopere/docker-bungeecord](https://github.com/Leopere/docker-bungeecord)
+- Hat tip to anyone whose code was used
+- Inspiration
+- etc
 
-[license]: https://github.com/D3strukt0r/docker-bungeecord/blob/master/LICENSE.txt
-[docker]: https://hub.docker.com/repository/docker/d3strukt0r/bungeecord
-[gh-action]: https://github.com/D3strukt0r/docker-bungeecord/actions
+[docker]: https://hub.docker.com/r/d3strukt0r/bungeecord
 [codacy]: https://www.codacy.com/manual/D3strukt0r/docker-bungeecord
+[gh-action]: https://github.com/Team-MaRo/docker-bungeecord/actions
+[gh-contributors]: https://github.com/Team-MaRo/docker-bungeecord/contributors
+[contributing]: https://github.com/Team-MaRo/.github/blob/master/CONTRIBUTING.md
+[code-of-conduct]: https://github.com/Team-MaRo/.github/blob/master/CODE_OF_CONDUCT.md
