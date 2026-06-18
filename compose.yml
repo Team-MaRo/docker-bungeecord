@@ -1,30 +1,30 @@
-version: "2"
-
 services:
   bungeecord:
-    build:
-      context: .
-      cache_from:
-        - ${IMAGE_CACHE:-d3strukt0r/bungeecord}
     image: ${IMAGE:-d3strukt0r/bungeecord}
     ports:
-      - 25565:25577
+      - 25565:25565
     networks:
       - internal
     volumes:
-      - bungeecord:/data
-      - ./docker/console.sh:/usr/local/bin/console
+      - bungeecord:/srv/bungeecord
+    # environment:
+    #   - MEMORY=512M   # optional; unset = JVM default heap sizing
+    # Send commands:  docker compose exec bungeecord console "<command>"
+    # Stop gracefully: docker compose stop  (mc-server-init sends `end`)
 
+  # An example backend server proxied by BungeeCord (see d3strukt0r/spigot):
   # lobby:
   #   image: d3strukt0r/spigot
   #   networks:
   #     - internal
   #   volumes:
-  #     - lobby:/data
+  #     - lobby:/srv/spigot
   #   environment:
-  #     - JAVA_MAX_MEMORY=1G
+  #     - MEMORY=1G
   #     - EULA=true
-  #     - BUNGEECORD=true
+  #     - BUNGEECORD=true   # online-mode=false + spigot bungeecord=true
+  # Then in BungeeCord's config.yml point a server at `lobby:25565` and set
+  # `ip_forward: true` (or pass -e BUNGEE__IP_FORWARD=true).
 
 networks:
   internal:
