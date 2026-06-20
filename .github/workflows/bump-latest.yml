@@ -30,7 +30,7 @@ jobs:
     name: Pin lastStableBuild
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # The CI PAT — its account bypasses branch protection, so we commit
           # directly instead of opening a PR. Also makes `git push` use this token.
