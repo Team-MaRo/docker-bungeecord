@@ -7,11 +7,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781377154,
-        "narHash": "sha256-QV8ieTu3OLLYf0F5Y2E9YPOHFsByh7XO9EjW5zjpOyI=",
+        "lastModified": 1781942658,
+        "narHash": "sha256-vUokrmfsy3VMKM7tzaUusAnE3a38xvJFgJGi0FAGBnk=",
         "owner": "Team-MaRo",
         "repo": "mc-server-init",
-        "rev": "7ce38b8ceec62d882b43dc6feea936c7068c88a4",
+        "rev": "a22607101ee14bbfda1fe66d60e0c179fb95e4e3",
         "type": "github"
       },
       "original": {
