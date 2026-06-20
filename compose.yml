@@ -1,34 +1,43 @@
+# BungeeCord proxy + one Spigot backend — a minimal, working example.
+#
+#   docker compose up                # Ctrl-C to stop; `down -v` to also drop volumes
+#
+# Point a Minecraft client at  localhost(:25565)  — BungeeCord routes you to the
+# "lobby" Spigot server. Online-mode is on, so the proxy authenticates with Mojang
+# (real skins) and forwards your identity to the backend; log in with a premium
+# account. For a cracked/offline test set BUNGEE__ONLINE_MODE=false.
+#
+# Consoles:  docker compose exec bungeecord console "end"
+#            docker compose exec lobby      console "say hi"
+# Attach:    docker attach $(docker compose ps -q bungeecord)   (detach: Ctrl-P Ctrl-Q)
+
 services:
   bungeecord:
-    image: ${IMAGE:-d3strukt0r/bungeecord}
+    image: d3strukt0r/bungeecord
     ports:
-      - 25565:25565
-    networks:
-      - internal
+      - "25565:25565"                                 # MC clients connect here
+    environment:
+      - BUNGEE__ONLINE_MODE=true                      # proxy authenticates with Mojang → real skins
+      - BUNGEE__IP_FORWARD=true                       # forward player identity to the backend
+      - BUNGEE__SERVERS__LOBBY__ADDRESS=lobby:25565   # the spigot service below
+      - BUNGEE__SERVERS__LOBBY__RESTRICTED=false
+      - BUNGEE__LISTENERS__0__PRIORITIES__0=lobby     # default server players land on
+    depends_on: [lobby]
     volumes:
       - bungeecord:/srv/bungeecord
-    # environment:
-    #   - MEMORY=512M   # optional; unset = JVM default heap sizing
-    # Send commands:  docker compose exec bungeecord console "<command>"
-    # Stop gracefully: docker compose stop  (mc-server-init sends `end`)
+    stdin_open: true   # keep the console attachable
+    tty: true
 
-  # An example backend server proxied by BungeeCord (see d3strukt0r/spigot):
-  # lobby:
-  #   image: d3strukt0r/spigot
-  #   networks:
-  #     - internal
-  #   volumes:
-  #     - lobby:/srv/spigot
-  #   environment:
-  #     - MEMORY=1G
-  #     - EULA=true
-  #     - BUNGEECORD=true   # online-mode=false + spigot bungeecord=true
-  # Then in BungeeCord's config.yml point a server at `lobby:25565` and set
-  # `ip_forward: true` (or pass -e BUNGEE__IP_FORWARD=true).
-
-networks:
-  internal:
-    external: false
+  lobby:
+    image: d3strukt0r/spigot
+    environment:
+      - EULA=true            # required; accepts https://aka.ms/MinecraftEULA
+      - BUNGEECORD=true      # online-mode=false + spigot.yml bungeecord=true + throttle off
+      - MEMORY=1G
+    volumes:
+      - lobby:/srv/spigot
+    stdin_open: true
+    tty: true
 
 volumes:
   bungeecord:
