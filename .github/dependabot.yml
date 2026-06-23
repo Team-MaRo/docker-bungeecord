@@ -13,8 +13,13 @@ updates:
       - "dependabot :robot:"
     schedule:
       interval: weekly
+      day: monday
       time: '09:30'
       timezone: Europe/Zurich
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: nix
     directory: /
@@ -22,10 +27,9 @@ updates:
       - "dependabot :robot:"
     schedule:
       interval: weekly
+      day: monday
       time: '09:30'
       timezone: Europe/Zurich
-    # Bundle all flake inputs (nixpkgs, spigot-build, mc-server-init, nix-utils)
-    # into a single PR so the lock file is updated once per run.
     groups:
       flake:
         patterns:
