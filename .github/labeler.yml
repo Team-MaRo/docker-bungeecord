@@ -1,9 +1,11 @@
-# Add 'repo' label to any root file changes
 repo:
-  - ./*
+  - changed-files:
+    - any-glob-to-any-file: '*'
 
-# Add 'docker' label to any change to files within the docker dir and docker relevant files
 docker:
-  - docker/**/*
-  - docker-compose.yml
-  - Dockerfile
+  - changed-files:
+    - any-glob-to-any-file:
+        - 'src/**/*'
+        - 'compose.yml'
+        - 'flake.nix'
+        - 'flake.lock'
