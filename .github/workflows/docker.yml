@@ -18,9 +18,10 @@ on:
         required: false
         default: "1"
 
-  # Image source OR the pinned jar set changed → rebuild every build so the new
-  # entrypoint/flake propagates to all tags. versions.json covers a new pinned
-  # build (bump-latest.yml); flake.lock covers a dependency bump.
+  # Image source OR the pinned jar set changed → rebuild the newest build only.
+  # versions.json covers a new pinned build (bump-latest.yml); flake.lock covers
+  # a dependency bump. Propagating an entrypoint/flake change to OLDER tags is
+  # done on demand via the weekly schedule ('missing') or a manual 'all' run.
   push:
     branches:
       - master
@@ -84,9 +85,9 @@ jobs:
           case "$event" in
             pull_request)      sel=latest ;;
             schedule)          sel=missing; NEWEST_N=1 ;;
-            push)              sel=all ;;
+            push)              sel=latest ;;
             workflow_dispatch) sel="${INPUT_VERSION:-all}" ;;
-            *)                 sel=all ;;
+            *)                 sel=latest ;;
           esac
 
           case "$sel" in
