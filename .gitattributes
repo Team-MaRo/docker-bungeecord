@@ -1,0 +1,24 @@
+# See https://www.gitattributes.io/api/web
+# See https://www.richie-bendall.ml/gitattributes-generator/
+
+# Auto detect text files and perform LF normalization
+# https://www.davidlaing.com/2012/09/19/customise-your-gitattributes-to-become-a-git-ninja/
+
+# Details per file setting:
+#   text    These files should be normalized (i.e. convert CRLF to LF).
+#   binary  These files are binary and should be left untouched.
+#
+# Note that binary is a macro for -text -diff.
+
+# These all target Linux and/or are read as inline scripts during the build
+# (Nix reads flake.nix's `''…''` blocks). CRLF in any of them breaks the build
+# or runtime with `$'\r': command not found`, so pin them to LF regardless of
+# core.autocrlf or the editor.
+*.sh text eol=lf
+*.nix text eol=lf
+flake.lock text eol=lf
+
+# Exclude files from exporting
+.gitattributes export-ignore
+.gitignore     export-ignore
+.gitkeep       export-ignore
