@@ -1,0 +1,138 @@
+name: Check outdated images
+
+# Weekly watchdog over the newest pinned build's Docker image. It pulls and boots
+# the published image; if the image is missing, reports itself outdated, or never
+# binds its listener, it triggers the docker workflow to rebuild it.
+#
+# The newest build we know about comes from `.#imageMatrix` (versions.json), which
+# lists exactly the builds we can produce an image for. New upstream builds are
+# pinned by bump-latest.yml.
+on:
+  schedule:
+    - cron: '30 9 * * 1' # Mondays 09:30 UTC
+
+  workflow_dispatch:
+
+permissions:
+  contents: write # keepalive pushes an empty commit to master
+  actions: write # to dispatch the docker workflow
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    name: Check newest image
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      # Newest pinned build number, from versions.json via .#latestBuild.
+      - name: Resolve newest build
+        id: prep
+        run: |
+          set -euo pipefail
+          echo "version=$(nix eval --raw .#latestBuild)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK (to compile the StopOnStart plugin)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Compile the throwaway StopOnStart plugin against the BungeeCord jar (built
+      # here, not committed). --release 8 keeps the bytecode loadable by the JDK-8
+      # images too.
+      - name: Build StopOnStart plugin
+        env:
+          UA: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        run: |
+          set -euo pipefail
+          build="${{ steps.prep.outputs.version }}"
+          sub=$([ "$build" -lt 680 ] && echo proxy || echo bootstrap)
+          curl -gfsSL -H "User-Agent: $UA" -H 'Accept: */*' -o bungeecord.jar \
+            "https://hub.spigotmc.org/jenkins/job/BungeeCord/${build}/artifact/${sub}/target/BungeeCord.jar"
+          javac --release 8 -cp bungeecord.jar -d plugin-build .github/check-outdated/StopOnStart.java
+          cp .github/check-outdated/plugin.yml plugin-build/
+          jar cf StopOnStart.jar -C plugin-build .
+
+      # Pull and run the published image for that build. Rebuild if it's missing,
+      # never binds its listener (broken), OR BungeeCord prints its
+      # "*** Warning, this build is outdated ***" banner — which it emits once the
+      # build has aged past its threshold (i.e. a newer build is available).
+      - name: Detect outdated/broken/missing image
+        id: docker
+        run: |
+          set -euo pipefail
+          image="$(echo "${{ vars.IMAGE_NAME }}:${{ steps.prep.outputs.version }}" | tr '[:upper:]' '[:lower:]')"
+
+          if ! docker pull "$image" >/dev/null 2>&1; then
+            echo "image $image not found"
+            echo "bad=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Drop the StopOnStart plugin in so the proxy shuts itself down right
+          # after it binds — the run ends in seconds (docker wait) instead of
+          # polling. The image runs as uid 65532, so the mount must be writable.
+          mkdir -p appdata/plugins
+          cp StopOnStart.jar appdata/plugins/
+          chmod -R 777 appdata
+          docker run -d -v "$PWD/appdata:/srv/bungeecord" --name bungee-check "$image" >/dev/null 2>&1 || true
+          timeout 120 docker wait bungee-check >/dev/null 2>&1 || true
+          docker logs bungee-check > docker.log 2>&1 || true
+          docker rm -f bungee-check >/dev/null 2>&1 || true
+
+          # BungeeCord logs "Listening on /0.0.0.0:25565" once the proxy is up.
+          ok=0; grep -qi 'Listening on' docker.log && ok=1
+
+          if grep -qi 'this build is outdated' docker.log; then
+            echo "image reports it is outdated — a newer build is available"
+            echo "bad=1" >> "$GITHUB_OUTPUT"
+          elif [ "$ok" != 1 ]; then
+            echo "proxy never bound its listener — broken"
+            cat docker.log || true
+            echo "bad=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "bad=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger rebuild
+        if: steps.docker.outputs.bad == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Image rebuild needed for ${{ steps.prep.outputs.version }} (bad=${{ steps.docker.outputs.bad }})"
+          gh workflow run docker.yml --ref master -f version="${{ steps.prep.outputs.version }}"
+
+      # GitHub auto-disables scheduled workflows after 60 days with no repository
+      # activity. If master's tip is older than the threshold, push one empty
+      # commit to re-arm them. Only on the scheduled run.
+      - name: Keepalive (prevent workflow auto-disable)
+        if: always() && github.event_name == 'schedule'
+        env:
+          KEEPALIVE_THRESHOLD_DAYS: '50'
+          KEEPALIVE_MESSAGE: 'chore: keepalive'
+        run: |
+          set -euo pipefail
+          last_epoch="$(git log -1 --pretty=%ct)"
+          age_days=$(( ( $(date +%s) - last_epoch ) / 86400 ))
+          if [ "$age_days" -lt "$KEEPALIVE_THRESHOLD_DAYS" ]; then
+            echo "last commit ${age_days}d ago (< ${KEEPALIVE_THRESHOLD_DAYS}d threshold) — no keepalive needed"
+            exit 0
+          fi
+          echo "last commit ${age_days}d ago — pushing keepalive commit"
+          git commit --allow-empty -m "$KEEPALIVE_MESSAGE"
+          git push origin HEAD:master
