@@ -1,0 +1,11 @@
+repo:
+  - changed-files:
+    - any-glob-to-any-file: '*'
+
+docker:
+  - changed-files:
+    - any-glob-to-any-file:
+        - 'src/**/*'
+        - 'compose.yml'
+        - 'flake.nix'
+        - 'flake.lock'

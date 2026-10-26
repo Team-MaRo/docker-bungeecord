@@ -1,0 +1,438 @@
+name: Docker
+
+on:
+  # Defensive weekly rebuild — fills any missing tags plus the newest build.
+  schedule:
+    - cron: '30 9 * * 1' # Mondays 09:30 UTC
+
+  # Manual builds. Selector: 'all', 'latest', 'missing' (not-yet-pushed + newest
+  # N), or a specific build number (e.g. 2080).
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Images to build: 'all', 'latest', 'missing', or a build number (e.g. 2080)"
+        required: true
+        default: "all"
+      newest_n:
+        description: "In 'missing' mode, how many newest builds to always rebuild"
+        required: false
+        default: "1"
+
+  # Image source OR the pinned jar set changed → rebuild the newest build only.
+  # versions.json covers a new pinned build (bump-latest.yml); flake.lock covers
+  # a dependency bump. Propagating an entrypoint/flake change to OLDER tags is
+  # done on demand via the weekly schedule ('missing') or a manual 'all' run.
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/docker.yml
+      - src/**
+      - flake.nix
+      - flake.lock
+      - versions.json
+      - jdk-boundaries.json
+
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Which images to build. The build list + per-build MC version & JDK come from
+  # `.#imageMatrix` (versions.json + jdk-boundaries.json), so they match exactly
+  # what `nix build .#"<build>"` will build.
+  matrix:
+    runs-on: ubuntu-latest
+    name: Compute matrix
+    outputs:
+      docker_matrix: ${{ steps.compute.outputs.docker_matrix }}
+      docker_build_matrix: ${{ steps.compute.outputs.docker_build_matrix }}
+      docker_count: ${{ steps.compute.outputs.docker_count }}
+      docker_build_count: ${{ steps.compute.outputs.docker_build_count }}
+      arch_list: ${{ steps.compute.outputs.arch_list }}
+      latest: ${{ steps.compute.outputs.latest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Compute matrix
+        id: compute
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          NEWEST_N: ${{ github.event.inputs.newest_n || '1' }}
+          IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          full="$(nix eval --json .#imageMatrix)"   # [{bungeecord, mc, java}]
+          event='${{ github.event_name }}'
+          # BungeeCord versions are Jenkins build NUMBERS → plain numeric sort.
+          SORT='sort_by(.bungeecord | tonumber)'
+          latest="$(printf '%s' "$full" | jq -r "$SORT | last | .bungeecord // \"\"")"
+
+          case "$event" in
+            pull_request)      sel=latest ;;
+            schedule)          sel=missing; NEWEST_N=1 ;;
+            push)              sel=latest ;;
+            workflow_dispatch) sel="${INPUT_VERSION:-all}" ;;
+            *)                 sel=latest ;;
+          esac
+
+          case "$sel" in
+            latest)
+              docker_matrix="$(printf '%s' "$full" | jq -c "$SORT | [last]")" ;;
+            newest)
+              docker_matrix="$(printf '%s' "$full" | jq -c --argjson n "$NEWEST_N" "[limit(\$n; ($SORT | reverse | .[]))]")" ;;
+            all)
+              docker_matrix="$full" ;;
+            missing)
+              # Already published = tags on Docker Hub; (re)build the rest plus
+              # the newest N as a safety net. Match on the build-number tag.
+              have="$(bash .github/scripts/dockerhub-tags.sh "$IMAGE_NAME")"
+              docker_matrix="$(printf '%s' "$full" | jq -c --argjson have "$have" --argjson n "$NEWEST_N" \
+                "( $SORT ) as \$s | ( [ \$s[] | select(.bungeecord | IN(\$have[]) | not) ] + [ limit(\$n; (\$s | reverse | .[])) ] ) | unique_by(.bungeecord) | $SORT")" ;;
+            *)
+              docker_matrix="$(printf '%s' "$full" | jq -c --arg v "$sel" '[.[] | select(.bungeecord == $v)]')" ;;
+          esac
+
+          # Multi-arch: expand build → (build × arch) on native runners.
+          arch_meta='{"amd64":{"runner":"ubuntu-24.04","nix_system":"x86_64-linux"},"arm64":{"runner":"ubuntu-24.04-arm","nix_system":"aarch64-linux"}}'
+          docker_build_matrix="$(jq -nc --argjson v "$docker_matrix" --argjson meta "$arch_meta" \
+            '[ $v[] as $ver | ($meta | keys[]) as $arch | $ver + {arch: $arch} + $meta[$arch] ]')"
+          arch_list="$(printf '%s' "$arch_meta" | jq -r 'keys | join(" ")')"
+
+          {
+            echo "docker_matrix=$docker_matrix"
+            echo "docker_build_matrix=$docker_build_matrix"
+            echo "docker_count=$(printf '%s' "$docker_matrix" | jq 'length')"
+            echo "docker_build_count=$(printf '%s' "$docker_build_matrix" | jq 'length')"
+            echo "arch_list=$arch_list"
+            echo "latest=$latest"
+          } >> "$GITHUB_OUTPUT"
+          echo "images: $docker_build_matrix"
+          echo "latest: $latest"
+
+  # Build each image with Nix (the flake bakes the version-correct JRE + the
+  # pinned BungeeCord jar). streamLayeredImage is single-arch, so build one
+  # tarball per (build × arch) on a native runner; the next job stitches them into
+  # a multi-arch manifest. PR events build but never push.
+  docker-build:
+    needs: matrix
+    if: needs.matrix.outputs.docker_build_count != '0'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.docker_build_matrix) }}
+
+    name: Build bungeecord:${{ matrix.bungeecord }} (${{ matrix.arch }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('**/flake.lock', '**/flake.nix', 'src/entrypoint.sh') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-${{ matrix.arch }}-
+          gc-max-store-size-linux: 5G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-${{ matrix.arch }}-
+          purge-created: 0
+          purge-last-accessed: P7D
+          purge-primary-key: never
+
+      - name: Extract Docker labels
+        uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ vars.IMAGE_NAME }}
+          tags: type=raw,value=${{ matrix.bungeecord }}
+          labels: |
+            org.opencontainers.image.authors=D3strukt0r <dev@d3strukt0r.dev>
+            org.opencontainers.image.title=BungeeCord ${{ matrix.bungeecord }}
+            org.opencontainers.image.description=BungeeCord proxy build ${{ matrix.bungeecord }} (Minecraft ${{ matrix.mc }}, JDK ${{ matrix.java }})
+
+      - name: Build OCI image with Nix
+        env:
+          LABELS_RAW: ${{ steps.meta.outputs.labels }}
+        run: |
+          set -euo pipefail
+          # metadata-action emits "KEY=VAL\n…"; the flake reads it via fromJSON.
+          # --impure feeds ONLY the labels; the jar + JDK are pure inputs (the jar
+          # is the pinned fetch, the build is the attr path).
+          export DOCKER_LABELS_JSON=$(jq -Rsc '
+            split("\n") | map(select(length > 0))
+            | map(split("=") | { key: .[0], value: (.[1:] | join("=")) })
+            | from_entries
+          ' <<<"$LABELS_RAW")
+          nix build --impure --print-build-logs ".#\"${{ matrix.bungeecord }}\""
+          cp -L result image.tar
+
+      - name: Generate SBOM (per-arch)
+        run: nix run nixpkgs#syft -- docker-archive:image.tar -o spdx-json=sbom.json
+
+      - name: Upload image + SBOM
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-${{ matrix.bungeecord }}-${{ matrix.arch }}
+          path: |
+            image.tar
+            sbom.json
+          retention-days: 1
+          if-no-files-found: error
+
+  # Per build: stitch the per-arch tarballs into a multi-arch manifest, push it
+  # (tagged with the build number, the MC-version alias, plus :latest for the
+  # newest build), and sign + attest the SBOMs. Skipped on PRs.
+  docker-manifest:
+    needs: [matrix, docker-build]
+    if: github.event_name != 'pull_request' && needs.matrix.outputs.docker_count != '0'
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.docker_matrix) }}
+
+    name: Manifest bungeecord:${{ matrix.bungeecord }}
+
+    services:
+      registry:
+        image: registry:3
+        ports:
+          - 5000:5000
+
+    env:
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+      ARCH_LIST: ${{ needs.matrix.outputs.arch_list }}
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          buildkitd-config-inline: |
+            [registry."localhost:5000"]
+              http = true
+
+      - name: Wait for local registry
+        run: |
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:5000/v2/ >/dev/null && exit 0
+            sleep 1
+          done
+          echo "registry never came up"; exit 1
+
+      - name: Install skopeo
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends skopeo
+
+      - name: Log in to Docker Hub
+        if: vars.DOCKERHUB_USERNAME != '' && env.dockerhub_token != ''
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Download this build's per-arch artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: image-${{ matrix.bungeecord }}-*
+          path: artifacts
+
+      - name: Stage per-arch tarballs into the local registry
+        id: stage
+        run: |
+          set -euo pipefail
+          DIGESTS='{}'
+          for arch in $ARCH_LIST; do
+            archive="artifacts/image-${{ matrix.bungeecord }}-${arch}/image.tar"
+            test -f "$archive" || { echo "missing $archive"; exit 1; }
+            skopeo copy --dest-tls-verify=false \
+              docker-archive:"$archive" \
+              docker://localhost:5000/staging:${{ matrix.bungeecord }}-${arch}
+            d=$(skopeo inspect --tls-verify=false \
+                  docker://localhost:5000/staging:${{ matrix.bungeecord }}-${arch} \
+                  --format '{{.Digest}}')
+            DIGESTS=$(jq -nc --argjson cur "$DIGESTS" --arg a "$arch" --arg d "$d" '$cur + {($a): $d}')
+            echo "Staged ${arch} → ${d}"
+          done
+          echo "digests=$DIGESTS" >> "$GITHUB_OUTPUT"
+          jq -nc --argjson d "$DIGESTS" '$d' > "digests-${{ matrix.bungeecord }}.json"
+
+      - name: Upload digest map
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.bungeecord }}
+          path: digests-${{ matrix.bungeecord }}.json
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Resolve tags
+        uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ vars.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ matrix.bungeecord }}
+            type=raw,value=${{ matrix.mc }}
+            type=raw,value=latest,enable=${{ matrix.bungeecord == needs.matrix.outputs.latest }}
+
+      - name: Create + push manifest list
+        if: vars.DOCKERHUB_USERNAME != '' && env.dockerhub_token != ''
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          ANNOTATIONS: ${{ steps.meta.outputs.annotations }}
+          DIGESTS: ${{ steps.stage.outputs.digests }}
+        run: |
+          set -euo pipefail
+          ANN_FLAGS=()
+          while IFS= read -r ann; do [ -z "$ann" ] && continue; ANN_FLAGS+=("--annotation" "$ann"); done <<< "$ANNOTATIONS"
+          TAG_FLAGS=()
+          while IFS= read -r tag; do [ -z "$tag" ] && continue; TAG_FLAGS+=("-t" "$tag"); done <<< "$TAGS"
+          SRC_REFS=()
+          for arch in $ARCH_LIST; do
+            d=$(jq -r --arg a "$arch" '.[$a]' <<<"$DIGESTS")
+            SRC_REFS+=("localhost:5000/staging@${d}")
+          done
+          docker buildx imagetools create "${ANN_FLAGS[@]}" "${TAG_FLAGS[@]}" "${SRC_REFS[@]}"
+
+      - name: Sign per-arch images + attach SBOMs
+        if: vars.DOCKERHUB_USERNAME != '' && env.dockerhub_token != ''
+        env:
+          IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+          DIGESTS: ${{ steps.stage.outputs.digests }}
+        run: |
+          set -euo pipefail
+          for arch in $ARCH_LIST; do
+            d=$(jq -r --arg a "$arch" '.[$a]' <<<"$DIGESTS")
+            cosign sign --yes "${IMAGE_NAME}@${d}"
+            cosign attest --yes --predicate "artifacts/image-${{ matrix.bungeecord }}-${arch}/sbom.json" \
+              --type spdxjson "${IMAGE_NAME}@${d}"
+          done
+
+      - name: Sign the manifest list
+        if: vars.DOCKERHUB_USERNAME != '' && env.dockerhub_token != ''
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            DIGEST=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)
+            cosign sign --yes "${tag}@${DIGEST}"
+          done <<< "$TAGS"
+
+  # SLSA build provenance per published (build × arch) digest.
+  docker-attest:
+    needs: [matrix, docker-manifest]
+    if: github.event_name != 'pull_request' && needs.matrix.outputs.docker_build_count != '0'
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      packages: write
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.docker_build_matrix) }}
+
+    name: Attest bungeecord:${{ matrix.bungeecord }} (${{ matrix.arch }})
+
+    env:
+      dockerhub_token: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Log in to Docker Hub
+        if: vars.DOCKERHUB_USERNAME != '' && env.dockerhub_token != ''
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Download digest map
+        uses: actions/download-artifact@v8
+        with:
+          name: digests-${{ matrix.bungeecord }}
+          path: .
+
+      - name: Resolve this arch's digest
+        id: d
+        run: |
+          set -euo pipefail
+          digest=$(jq -r --arg a "${{ matrix.arch }}" '.[$a]' "digests-${{ matrix.bungeecord }}.json")
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest SLSA provenance
+        if: vars.DOCKERHUB_USERNAME != '' && env.dockerhub_token != ''
+        uses: actions/attest@v4
+        with:
+          subject-name: docker.io/${{ vars.IMAGE_NAME }}
+          subject-digest: ${{ steps.d.outputs.digest }}
+          push-to-registry: true
+
+  # Record which commit produced each published image: one git tag per built
+  # build number, on the build commit, force-moved when rebuilt on a newer commit.
+  # The registry is the source of truth for "what's published" (the matrix's
+  # `missing` selector); these tags are for provenance.
+  tag:
+    needs: [matrix, docker-manifest]
+    if: github.event_name != 'pull_request' && needs.matrix.outputs.docker_count != '0' && vars.DOCKERHUB_USERNAME != ''
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    name: Tag build commit
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Tag built builds on this commit
+        env:
+          MATRIX: ${{ needs.matrix.outputs.docker_matrix }}
+        run: |
+          set -euo pipefail
+          mapfile -t builds < <(printf '%s' "$MATRIX" | jq -r '.[].bungeecord')
+          [ "${#builds[@]}" -gt 0 ] || { echo "no builds to tag"; exit 0; }
+          for b in "${builds[@]}"; do
+            git tag -f "build-$b" "$GITHUB_SHA"
+          done
+          # Distinct tag refs → a single force push moves any that were built on
+          # an older commit. Tag pushes via GITHUB_TOKEN don't re-trigger CI.
+          git push -f origin $(printf 'build-%s ' "${builds[@]}")
+          echo "Tagged ${GITHUB_SHA} with: ${builds[*]}"

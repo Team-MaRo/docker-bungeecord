@@ -1,0 +1,69 @@
+{
+  "nodes": {
+    "mc-server-init": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1782216657,
+        "narHash": "sha256-jj5HYANC/aPbcgyrKXFhxJM1bTrOIPwWTBWiBSjBlqw=",
+        "owner": "Team-MaRo",
+        "repo": "mc-server-init",
+        "rev": "82cca1a08da989150f0ba2e7935672736c1c652e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Team-MaRo",
+        "repo": "mc-server-init",
+        "type": "github"
+      }
+    },
+    "nix-utils": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1791906082,
+        "narHash": "sha256-w810417Sui09j/Y1DHQbKd5a8LMiPUk31nWPAWx/rm8=",
+        "owner": "Team-MaRo",
+        "repo": "nix-utils",
+        "rev": "cdcb2567fd5327e2a0a72fb7dbb3ac67eb45e4d4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Team-MaRo",
+        "repo": "nix-utils",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1792030654,
+        "narHash": "sha256-OaQwAtPMTjQiY2sT/2/62UbSPhzP/0aDnWzMm/NCiUw=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "26f4107e47e3ad0ffd0db220469ba83b6f6d96e8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-26.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "mc-server-init": "mc-server-init",
+        "nix-utils": "nix-utils",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

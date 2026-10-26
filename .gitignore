@@ -1,0 +1,11 @@
+# Example
+# - https://www.toptal.com/developers/gitignore/api/linux,macos,windows,git
+# - https://www.toptal.com/developers/gitignore?templates=linux,macos,windows,git
+
+server/
+
+# check-outdated local run artifacts (StopOnStart plugin build + server junk)
+StopOnStart.jar
+
+# Claude Code entrypoint — just points at AGENTS.md (the tracked source of truth)
+CLAUDE.md
