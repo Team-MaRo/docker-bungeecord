@@ -25,7 +25,8 @@ second repo.
 - **Versioning is by Jenkins build number, not semver.** `versions.json` maps
   `build# → { mc, sha256 }`. We publish the **last build before each Minecraft
   version bump** (so there's an image per MC version BungeeCord ever supported),
-  discovered from each jar's manifest `Implementation-Version`.
+  discovered from each jar's manifest `Implementation-Version` (from build 2111,
+  whose manifest has none: from the nested `META-INF/libraries/bungeecord-api-<mc>-…jar`).
 - **The jar is fetched from the SpigotMC Jenkins.** Cloudflare 403s non-browser
   User-Agents, so the `fetchurl` sends a browser UA via `curlOptsList` (the
   default Nix/curl UA gets blocked). Path rule: build **< 680 → `proxy/target`**,
@@ -48,7 +49,7 @@ second repo.
 | `jdk-boundaries.json` | `[[<min build#> <min JRE> <desired JRE>], …]`, newest-first; first bound the build is `>=` to wins. The image **runs on the desired** JRE; min is the bytecode floor (reference). |
 | `src/entrypoint.sh` | Renders `config.yml` from `BUNGEE__` env (via `yq`), defaults the listener to `0.0.0.0:25565`, builds the JVM command, forwards leading-option CLI args to BungeeCord, then `exec mc-server-init --stop-command end -- java …` (PID 1). Packaged with `writeShellApplication`. |
 | `.github/workflows/docker.yml` | `matrix` (from `.#imageMatrix`; `workflow_dispatch` selector `all`/`latest`/`missing`/`<build#>`, default `all`; `missing` diffs vs Docker Hub tags via `dockerhub-tags.sh`; push→`latest`, schedule→`missing`) → `docker-build` (Nix image per build × arch + SBOM) → `docker-manifest` (multi-arch manifest, cosign sign/attest; tags = `<build#>` + `<mc>` + `latest`-on-newest) → `docker-attest` (SLSA) → `tag` (git `build-<n>` tag per build). |
-| `.github/workflows/bump-latest.yml` | Resolves `lastStableBuild` → concrete build#, prefetches the jar hash + MC version, updates `versions.json`, and **commits directly to the default branch** via `secrets.GH_PAT` (the CI account that bypasses branch protection; amends if the previous commit was a bump). Family model: a new build of the current MC version rolls that entry; a new version is added (freezing the previous). |
+| `.github/workflows/bump-latest.yml` | Resolves `lastStableBuild` → concrete build#, prefetches the jar hash + MC version, updates `versions.json`, and **commits directly to the default branch** via `secrets.GH_PAT` (the CI account that bypasses branch protection; one new commit per bump — never amend: the checkout is shallow, so an amend would orphan the history). Family model: a new build of the current MC version rolls that entry; a new version is added (freezing the previous). |
 | `.github/workflows/check-outdated.yml` | Weekly watchdog over the newest build's **image**: builds the StopOnStart plugin, pulls + boots the image behind it, and on missing/broken/`this build is outdated` dispatches `docker.yml`. Also the keepalive (re-arms the schedules). |
 | `.github/check-outdated/StopOnStart.java` + `plugin.yml` | Tiny BungeeCord plugin (`onEnable()` → delayed `ProxyServer.getInstance().stop()`). Built in CI (not committed; `StopOnStart.jar` is gitignored). Uses only the long-stable API so it loads on builds 251→current. |
 | `.github/scripts/dockerhub-tags.sh` | Lists a public repo's Docker Hub tags (for the `missing` selector). |
@@ -94,8 +95,10 @@ docker run --rm -v "C:/path/to/docker-bungeecord:/work" -v "C:/tmp:/out" -w /wor
          && rm -f /out/image.tar && install -m644 \$(readlink -f /tmp/result) /out/image.tar"
 docker load -i /tmp/image.tar          # tag is :2080; re-tag :latest if needed
 
-# Build the StopOnStart plugin (compile against a BungeeCord jar; --release 8):
-javac --release 8 -cp BungeeCord.jar -d plugin-build .github/check-outdated/StopOnStart.java
+# Build the StopOnStart plugin (compile against a BungeeCord jar; --release 8).
+# Builds >= 2111 nest the API under META-INF/libraries/, so add those jars too:
+unzip -qo BungeeCord.jar 'META-INF/libraries/*' -d bc-libs
+javac --release 8 -cp "BungeeCord.jar:$(printf '%s:' bc-libs/META-INF/libraries/*.jar)" -d plugin-build .github/check-outdated/StopOnStart.java
 cp .github/check-outdated/plugin.yml plugin-build/ && jar cf StopOnStart.jar -C plugin-build .
 ```
 

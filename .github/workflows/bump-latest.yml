@@ -63,9 +63,13 @@ jobs:
           # SRI hash (sha256-<base64>) — matches what nix fetchurl expects.
           sha="sha256-$(openssl dgst -sha256 -binary bc.jar | base64 -w0)"
           # Minecraft version from the jar manifest (e.g. "…Bootstrap:26.1-R0.1-SNAPSHOT:…" -> 26.1).
+          # From build 2111 the manifest has no version; the nested API jar's name
+          # carries it instead (META-INF/libraries/bungeecord-api-26.1-R0.1-SNAPSHOT.jar).
           mc="$(unzip -p bc.jar META-INF/MANIFEST.MF | tr -d '\r' \
                 | sed -nE 's/.*Bootstrap[:-]([0-9][0-9.]*)(-R.*)?.*/\1/p' | head -n1)"
-          [ -n "$mc" ] || mc="unknown"
+          [ -n "$mc" ] || mc="$(unzip -Z1 bc.jar \
+                | sed -nE 's#^META-INF/libraries/bungeecord-api-([0-9][0-9.]*)-R.*#\1#p' | head -n1)"
+          [ -n "$mc" ] || { echo "could not determine the Minecraft version of build $build"; exit 1; }
           echo "build=$build mc=$mc sha=$sha"
 
           # Pin the last build per Minecraft version: drop any existing entry of the
@@ -85,19 +89,10 @@ jobs:
             echo "mc=$mc"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Commit directly (amend if the previous commit was a bump)
+      - name: Commit directly
         if: steps.bump.outputs.changed == '1'
         run: |
           set -euo pipefail
           git add versions.json
-          msg="chore: pin BungeeCord build ${{ steps.bump.outputs.build }} (Minecraft ${{ steps.bump.outputs.mc }})"
-          branch="${GITHUB_REF#refs/heads/}"
-          # Collapse consecutive rolling-latest bumps into one commit: if the current
-          # tip is itself a bump commit, amend it (force-push) instead of stacking.
-          if git log -1 --pretty=%s | grep -q '^chore: pin BungeeCord build '; then
-            git commit --amend -m "$msg"
-            git push --force-with-lease origin "HEAD:$branch"
-          else
-            git commit -m "$msg"
-            git push origin "HEAD:$branch"
-          fi
+          git commit -m "chore: pin BungeeCord build ${{ steps.bump.outputs.build }} (Minecraft ${{ steps.bump.outputs.mc }})"
+          git push origin "HEAD:${GITHUB_REF#refs/heads/}"

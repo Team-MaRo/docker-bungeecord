@@ -53,7 +53,9 @@ jobs:
 
       # Compile the throwaway StopOnStart plugin against the BungeeCord jar (built
       # here, not committed). --release 8 keeps the bytecode loadable by the JDK-8
-      # images too.
+      # images too. From build 2111 the jar is a thin bootstrap with the API nested
+      # under META-INF/libraries/, so those jars go on the classpath as well
+      # (unzip exits 11 when an older, flat jar has none).
       - name: Build StopOnStart plugin
         env:
           UA: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -63,7 +65,11 @@ jobs:
           sub=$([ "$build" -lt 680 ] && echo proxy || echo bootstrap)
           curl -gfsSL -H "User-Agent: $UA" -H 'Accept: */*' -o bungeecord.jar \
             "https://hub.spigotmc.org/jenkins/job/BungeeCord/${build}/artifact/${sub}/target/BungeeCord.jar"
-          javac --release 8 -cp bungeecord.jar -d plugin-build .github/check-outdated/StopOnStart.java
+          unzip -qo bungeecord.jar 'META-INF/libraries/*' -d bungeecord-libs || [ $? -eq 11 ]
+          shopt -s nullglob
+          cp=bungeecord.jar
+          for lib in bungeecord-libs/META-INF/libraries/*.jar; do cp+=":$lib"; done
+          javac --release 8 -cp "$cp" -d plugin-build .github/check-outdated/StopOnStart.java
           cp .github/check-outdated/plugin.yml plugin-build/
           jar cf StopOnStart.jar -C plugin-build .
 
